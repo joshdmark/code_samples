@@ -1,0 +1,125 @@
+---
+title: "Lowe Tweets"
+author: "Josh Mark"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+If you're an NBA fan, casually or a Leage Pass enthusiast, you've likely heard of Zach Lowe. Whether it's his transcendent podcast, The Lowe Post [link], or appearances on The Jump [link], his basketball knowledge is boundless. He may not break news at the level of Woj, but provides maximum levels of spice to keep us all entertained and in-the-know about the sport.
+
+So when someone is interesting to you, what do we do in 2019? We look through their tweets. Now before you think this is the tweet-searching for fireable tweets, that's not what this is. We're going to do a sentiment analysis on [Zach's twitter page](https://twitter.com/ZachLowe_NBA), and see what we can find.
+
+
+First, let's get the tweets.
+```{r}
+library(rtweet)
+library(httpuv)
+library(syuzhet)
+library(tidyverse)
+library(lubridate)
+library(tidytext)
+
+lowe_account <- lookup_users('ZachLowe_NBA')
+lowe_friends <- get_friends('ZachLowe_NBA') #list of people Zach follows
+lowe_friend_names <- lookup_users(lowe_friends$user_id) #info on accounts Zach follows
+```
+
+The *get_timeline()* function only allows us to get 3200 tweets at time, so we'll look at roughly 3,000 tweets from Zach.
+```{r}
+lowe_timeline <- get_timeline('ZachLowe_NBA', n = 3200) %>% # get timeline of tweets
+  mutate(tweet_id = 1:n(), 
+         created_at = format(created_at, tz = "America/New_York"))
+
+## clean up tweet text
+tweets <- gsub("http.*", "", lowe_timeline$text)
+tweets <- gsub("https.*", "", tweets)
+tweets <- gsub("#.*", "", tweets)
+tweets <- gsub("@.*", "", tweets)
+tweets <- gsub("[[:punct:]]", "", tweets)
+tweets <- gsub("[[:digit:]]", "", tweets)
+```
+
+Covering basketball is an around-the-clock job, but is Zach's twitter round the clock too?
+```{r}
+lowe_timeline %>% 
+  mutate(tweet_hour = hour(created_at)) %>% 
+  count(tweet_hour) %>% 
+  ggplot(aes(tweet_hour, n)) + 
+  geom_col(fill = '#e7780f') + 
+  scale_x_continuous(breaks=c(0:24)) +
+  coord_polar() +
+  labs(y = NULL, x = NULL, 
+       title = 'Zach Lowe Tweets by Hour')
+```
+
+It's good to see that Zach is getting some sleep. Rarely does he tweet between 11PM and 7AM, but his most prominent hour on Twitter is the 9AM hour. 
+
+
+Before doing a sentiment analysis on the tweets, we need to do some tidying.
+```{r}
+tidy_tweets <- lowe_timeline %>% 
+  unnest_tokens(word, text) %>% 
+  anti_join(stop_words, by = 'word') %>% # remove stop words
+  filter(!str_detect(word, '^[0-9]'), # remove words that start with numbers
+         word != 'https', 
+         word != 't.co') %>% 
+  left_join(get_sentiments("nrc")) 
+  
+tidy_tweets <- tidy_tweets %>% 
+  left_join(get_sentiments("afinn"), by = 'word') %>%  # add sentiment score
+  mutate(score = ifelse(is.na(score), 0, score))
+
+tidy_tweets <- get_sentiments("bing") %>% 
+  rename(sent_value = sentiment) %>% # add positive or negative sentiment column
+  right_join(tidy_tweets)
+```
+
+```{r, echo=F}
+# tidy_tweets <- tidy_tweets %>% 
+#   filter(word != 'https',
+#          word != 't.co')
+```
+
+
+```{r}
+tweet_sentiments <- tidy_tweets %>% 
+  group_by(tweet_id) %>% 
+  summarise(sent_score = sum(score))
+
+ggplot(tweet_sentiments) + 
+  geom_density(aes(x=sent_score)) + 
+  theme_minimal()
+```
+
+Zach's most positive tweet?
+```{r}
+most_positive <- tweet_sentiments[which.max(tweet_sentiments$sent_score), "tweet_id"] %>% as.integer()
+knitr::kable(lowe_timeline %>% 
+               filter(tweet_id == most_positive) %>% 
+               select(created_at, text) %>% data.frame())
+```
+
+What about his most negative?
+```{r}
+most_negative <- tweet_sentiments[which.min(tweet_sentiments$sent_score), "tweet_id"] %>% as.integer()
+knitr::kable(lowe_timeline %>% 
+               filter(tweet_id == most_negative) %>% 
+               select(created_at, text) %>% data.frame())
+```
+
+What words does Zach use most?
+```{r}
+set.seed(1)
+library(wordcloud)
+wc <- tidy_tweets %>% 
+  count(word, sort = T)
+wordcloud(words = wc$word, freq = wc$n, min.freq = 20, 
+          colors = brewer.pal(12, "Dark2"))
+```
+
+
+
+
