@@ -1,0 +1,138 @@
+---
+title: "Lyrical Text Analysis"
+author: "Josh Mark"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(wordcloud)
+library(tidytext)
+library(waffle)
+lyrics_csv <- read_csv("lyrics.csv.zip") %>% filter(!is.na(lyrics))
+```
+
+data from: https://www.kaggle.com/gyani95/380000-lyrics-from-metrolyrics 
+
+
+```{r}
+music <- lyrics_csv %>% 
+  filter(year >= 1990) %>% 
+  mutate(decade = 
+           case_when(#year >= 1970 & year < 1980 ~ "70's", 
+                     #year >= 1980 & year < 1990 ~ "80's", 
+                     year >= 1990 & year < 2000 ~ "90's", 
+                     year >= 2000 & year < 2010 ~ "00's", 
+                     year >= 2010 ~ "10's")) %>% 
+  mutate(decade = factor(decade, 
+                          levels = c(#"70's",
+                                     #"80's",
+                                     "90's",
+                                     "00's", 
+                                     "10's")), 
+         song_id = row_number()) %>% 
+  select(-index)
+```
+
+waffle 
+```{r}
+# by_year <- music %>% 
+#   count(decade, sort = T) %>% 
+#   mutate(total_songs = sum(n), 
+#          song_pct = n / total_songs) %>% 
+#   select(decade, n)
+# ggplot(by_year) + 
+#   geom_col(aes(x=0, y=n, fill = decade), position = 'stack')
+```
+
+
+tidy the lryics data
+```{r}
+tidy_music <- music %>% 
+  unnest_tokens(word, lyrics)
+
+# nums <- tidy_music %>% 
+#   filter(str_detect(word, '^[0-9]')) %>% # anything that starts with a number
+#   select(word) %>% unique()
+
+tidy_music <- tidy_music %>% 
+  anti_join(stop_words, by = 'word') %>%  # remove stop words (i.e. "I", "a", "the", etc.)
+  filter(!str_detect(word, '^[0-9]')) %>% 
+  left_join(get_sentiments("bing")) %>% # add positive/negative sentiment
+  left_join(get_sentiments("afinn")) # add sentiment score
+
+text <- tidy_music %>% 
+  filter(!is.na(tidy_music$sentiment) & !is.na(tidy_music$score))
+```
+
+
+word cloud 
+```{r}
+wc <- text %>% 
+  count(word, sort = T)
+wordcloud(words = wc$word, 
+          freq = wc$n, 
+          min.freq = 2000, 
+          colors = brewer.pal(10, "Dark2"))
+```
+
+```{r}
+tmp <- text %>% 
+  group_by(artist, song) %>% 
+  mutate(song_sentiment_score = sum(score, na.rm = T)) %>% 
+  ungroup()
+```
+
+```{r}
+x <- text %>% 
+  group_by(song, artist,year,genre) %>% 
+  summarise(score = sum(score)) %>% 
+  group_by(year,genre) %>% 
+  summarise(m_score = median(score)) %>% 
+  mutate(score_color = ifelse(m_score > 0, 'blue', 
+                              ifelse(m_score < 0, 'darkred', 'grey')))
+# ggplot(x,aes(year,m_score,fill=genre)) + 
+#   geom_line() + 
+#   geom_hex()
+#   facet_wrap(~genre)
+
+ggplot(x) + 
+  geom_line(aes(year,m_score)) + 
+  facet_wrap(~genre) + 
+  geom_hline(yintercept = 0, alpha = .5, color = 'darkred') + 
+  labs(x = 'Year',
+       y = 'Median Song Sentiment Score',
+       subtitle = 'Sentiment Scores Over Time')
+```
+
+data aggregation
+```{r}
+score_by_song <- text %>% 
+  group_by(artist, song_id) %>% 
+  summarise(song_score = sum(score)) %>% 
+  group_by(artist) %>% 
+  summarise(mean_score = mean(song_score, na.rm = T))
+```
+
+Top 10 Most Positive and Negative Artists by Average Sentiment Score
+```{r}
+top_20 <- score_by_song %>% arrange(mean_score) %>% head(10) %>% 
+  rbind(score_by_song %>% arrange(-mean_score) %>% head(10) %>% arrange(mean_score))
+
+top_20 <- top_20 %>% mutate(artist = factor(artist)) %>% mutate(artist = fct_relevel(artist, top_20$artist))
+
+ggplot(top_20, 
+       aes(artist, mean_score, 
+           fill = mean_score)) + 
+  geom_col() + 
+  coord_flip() + 
+  labs(x = 'Artist',
+       y = 'Avg Song Sentiment Score') + 
+  theme(legend.position = "none")
+```
+
